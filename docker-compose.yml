@@ -1,0 +1,68 @@
+# Lightweight SQL Runner stack.
+# PostgreSQL is NOT published to the host — only reachable on sql-network.
+# API is bound to 127.0.0.1:3000 for local Nginx proxy (not public by default).
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: sql-runner-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_BOOTSTRAP_PASSWORD}
+      POSTGRES_DB: playground
+      PLAYGROUND_PASSWORD: ${PGPASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/01_create_user.sh:/docker-entrypoint-initdb.d/01_create_user.sh:ro
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/02_schema.sql:ro
+    networks:
+      - sql-network
+    # No ports: section — PostgreSQL stays private.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d playground"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    # Cap memory for a small VM
+    mem_limit: 384m
+    shm_size: 64mb
+
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    container_name: sql-runner-api
+    restart: unless-stopped
+    env_file:
+      - ./api/.env
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGDATABASE: playground
+      PGUSER: playground
+      PGPASSWORD: ${PGPASSWORD}
+    ports:
+      # Localhost only — Nginx on the host will proxy here later.
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - sql-network
+    # No Docker socket mount. No host filesystem mounts beyond the image.
+    mem_limit: 256m
+    read_only: true
+    tmpfs:
+      - /tmp
+
+networks:
+  sql-network:
+    name: sql-network
+    driver: bridge
+    internal: false
+    # Postgres has no published ports; only containers on this network can reach it.
+
+volumes:
+  postgres_data:
+    name: sql-runner-postgres-data
